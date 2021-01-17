@@ -1,0 +1,9 @@
+{
+    "files.associations": {
+        "iostream": "cpp"
+    },
+    "C_Cpp.default.includePath": [
+        "/usr/include/x86_64-linux-gnu/mpich",
+        "${default}",
+    ]
+}
