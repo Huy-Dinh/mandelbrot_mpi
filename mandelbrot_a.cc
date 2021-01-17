@@ -10,25 +10,56 @@
 #include <cstring>
 #include <cmath>
 
-int main( int argc, char ** argv )
-{
-    int width = 1024, height = 1024;
-    double sx = 2./width;
-    double sy = 2./height;
-    double m = 1.;
-    double x0 = -.5, y0 = .0;
-    double max_abs = 2.;
-    int max_iter = 350;
+// Since this is known during compiled time anyway, make them constepxr
+// to avoid needing to do heap allocation.
+constexpr int width = 1024;
+constexpr int height = 1024;
+unsigned char image[width * height * 4];
 
+// This is probably going to be optimized,
+// but no reason to not be constexpr
+constexpr double sx = 2. / width;
+constexpr double sy = 2. / height;
+constexpr double max_abs = 2.;
+constexpr int max_iter = 350;
+
+double m = 1.;
+double xZero = -.5;
+double yZero = .0;
+
+void generateMandelbrotSubset(unsigned char *array, int const rank, int const size)
+{
+    int heightSlice = height / size;
+    int yOffset = height * rank / size;
+    int y = 0;
+    int x = 0;
+    for (y = 0; y < heightSlice; y++)
+    {
+        int realY = y + yOffset;
+        for (x = 0; x < width; x++)
+        {
+            complex c(xZero + sx * (x - width / 2) / m, yZero + sy * (realY - height / 2) / m);
+            int iter = mandelbrot(c, max_abs, max_iter);
+            unsigned int col = make_color(max_iter, iter, rank, size);
+            set_pixel(array, width * y + x, col);
+        }
+    }
+}
+
+int main(int argc, char **argv)
+{
     /* Initialize MPI */
-    int rank , size ;
-    MPI_Init(&argc , &argv);
+    int rank, size;
+    MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-    if ( argc > 1 ) m = std::strtod( argv[1], 0 );
-    if ( argc > 2 ) x0 = std::strtod( argv[2], 0 );
-    if ( argc > 3 ) y0 = std::strtod( argv[3], 0 );
+    if (argc > 1)
+        m = std::strtod(argv[1], 0);
+    if (argc > 2)
+        xZero = std::strtod(argv[2], 0);
+    if (argc > 3)
+        yZero = std::strtod(argv[3], 0);
 
     assert((width * height) % size == 0); // Number of pixels must be divisible by the number of processes
 
@@ -40,25 +71,28 @@ int main( int argc, char ** argv )
      * image.
      * Note: you will need to change the code for rank 0.
      */
-    if (rank == 0) {
-        unsigned char* image = (unsigned char*) malloc(width * height * 4);
+    int sliceSize = width * height * 4 / size;
+    if (rank == 0)
+    {
+        generateMandelbrotSubset(image, rank, size);
 
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                complex c( x0 + sx * (x - width/2) / m, y0 + sy * (y - height/2) / m );
-                int iter = mandelbrot( c, max_abs, max_iter );
-                unsigned int col = make_color(max_iter, iter, rank, size);
-                set_pixel(image, width * y + x, col);
-            }
+        for (int i = 1; i < size; ++i)
+        {
+            MPI_Recv(&image[sliceSize * i], sliceSize, MPI_UNSIGNED_CHAR, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         }
 
         /* ... PNG encoding ... */
         unsigned error = lodepng_encode32_file("mandelbrot_a.png", image, width, height);
-        if (error) {
+        if (error)
+        {
             std::cout << "error " << error << " : " << lodepng_error_text(error) << std::endl;
         }
-
-        free(image);
+    }
+    else
+    {
+        std::vector<unsigned char> subImage(width * height * 4 / size);
+        generateMandelbrotSubset(&subImage[0], rank, size);
+        MPI_Send(&subImage[0], sliceSize, MPI_UNSIGNED_CHAR, 0, 0, MPI_COMM_WORLD);
     }
 
     /* Shutdown MPI, must be the last MPI call */
