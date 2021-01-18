@@ -46,6 +46,15 @@ void generateMandelbrotSubset(unsigned char *array, int const rank, int const bl
     }
 }
 
+inline int getStartingLine()
+{
+    int startingLine = 0;
+    unsigned char requestLineBuf = startingLineRequestBody;
+    MPI_Send(&requestLineBuf, 1, MPI_UNSIGNED_CHAR, 0, startingLineTag, MPI_COMM_WORLD);
+    MPI_Recv(&startingLine, 1, MPI_INT, 0, startingLineTag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    return startingLine;
+}
+
 int main( int argc, char ** argv )
 {
     /* Initialize MPI */
@@ -109,14 +118,10 @@ int main( int argc, char ** argv )
          */
         int blockSize = 0;
         MPI_Bcast(&blockSize, 1, MPI_INT, 0, MPI_COMM_WORLD);
-        int startingLine = 0;
-        unsigned char requestLineBuf = startingLineRequestBody;
-        MPI_Send(&requestLineBuf, 1, MPI_UNSIGNED_CHAR, 0, startingLineTag, MPI_COMM_WORLD);
-        MPI_Recv(&startingLine, 1, MPI_INT, 0, startingLineTag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        int startingLine = getStartingLine();
         while (startingLine != -1) {
             generateMandelbrotSubset(&subImage[0], rank, blockSize, startingLine, size);
-            MPI_Send(&requestLineBuf, 1, MPI_UNSIGNED_CHAR, 0, startingLineTag, MPI_COMM_WORLD);
-            MPI_Recv(&startingLine, 1, MPI_INT, 0, startingLineTag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            startingLine = getStartingLine();
         }
     }
 
