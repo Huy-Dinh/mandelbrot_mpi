@@ -10,16 +10,49 @@
 #include <cmath>
 
 
+constexpr int blockSizeBroadcastTag = 100;
+constexpr int startingLineTag = 101;
+constexpr unsigned char startingLineRequestBody = 's';
+constexpr int calculatedResultTag = 102;
+
+// Since this is known during compiled time anyway, make them constepxr
+// to avoid needing to do heap allocation.
+constexpr int width = 1024;
+constexpr int height = 1024;
+unsigned char image[width * height * 4];
+
+// This is probably going to be optimized,
+// but no reason to not be constexpr
+constexpr double sx = 2. / width;
+constexpr double sy = 2. / height;
+constexpr double max_abs = 2.;
+constexpr int max_iter = 350;
+
+double m = 1.;
+double xZero = -.5;
+double yZero = .0;
+
+void generateMandelbrotSubset(unsigned char *array, int const rank, int const blockSize, int const startingLine, int const size)
+{
+    int heightSlice = blockSize;
+    int yOffset = startingLine;
+    int y = 0;
+    int x = 0;
+    for (y = 0; y < heightSlice; y++)
+    {
+        int realY = y + yOffset;
+        for (x = 0; x < width; x++)
+        {
+            complex c(xZero + sx * (x - width / 2) / m, yZero + sy * (realY - height / 2) / m);
+            int iter = mandelbrot(c, max_abs, max_iter);
+            unsigned int col = make_color(max_iter, iter, rank, size);
+            set_pixel(array, width * y + x, col);
+        }
+    }
+}
+
 int main( int argc, char ** argv )
 {
-    int width = 1024, height = 1024;
-    double sx = 2./width;
-    double sy = 2./height;
-    double m = 1.;
-    double x0 = -.5, y0 = .0;
-    double max_abs = 2.;
-    int max_iter = 350;
-
     /* Initialize MPI */
     int rank, size;
     MPI_Init(&argc , &argv);
@@ -27,11 +60,12 @@ int main( int argc, char ** argv )
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     if ( argc > 1 ) m = std::strtod( argv[1], 0 );
-    if ( argc > 2 ) x0 = std::strtod( argv[2], 0 );
-    if ( argc > 3 ) y0 = std::strtod( argv[3], 0 );
+    if ( argc > 2 ) xZero = std::strtod( argv[2], 0 );
+    if ( argc > 3 ) yZero = std::strtod( argv[3], 0 );
 
     int blockSize;
-    unsigned char* image = (unsigned char*) calloc(width * height * 4, sizeof(unsigned char));
+
+    unsigned char* image = (unsigned char*) calloc(height, sizeof(unsigned char));
 
     if (rank == 0) { // root process
         std::cout << "Please enter the blocksize: ";
@@ -39,6 +73,7 @@ int main( int argc, char ** argv )
 
         assert(height % blockSize == 0); // ensure that image height is divisible by the blockSize
 
+        int nextStartingLine = 0;
         /**
          * TODO root process
          * 1. Broadcast the block size to all processes
@@ -46,9 +81,29 @@ int main( int argc, char ** argv )
          * 3. Answer with the line where the worker should start. 
          *    Use line = -1 to indicate that no more blocks are available.
          */
+        // Broadcast the block size to all processes
+        MPI_Bcast(&blockSize, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        std::cout << "Broadcasted" << std::endl;
+        int stoppedProcessCount = 0;
+        MPI_Status recvStatus;
+        unsigned char requestLineBuf;
+        // As long as there are still child processes running
+        while (stoppedProcessCount < size - 1) {
+            MPI_Recv(&requestLineBuf, 1, MPI_UNSIGNED_CHAR, MPI_ANY_SOURCE, startingLineTag, MPI_COMM_WORLD, &recvStatus);
+            if (requestLineBuf == startingLineRequestBody) {
+                // If there's no more work to be done
+                if (nextStartingLine == -1) {
+                    MPI_Send(&nextStartingLine, 1, MPI_INT, recvStatus.MPI_SOURCE, startingLineTag, MPI_COMM_WORLD);
+                    ++stoppedProcessCount;
+                } else {
+                    MPI_Send(&nextStartingLine, 1, MPI_INT, recvStatus.MPI_SOURCE, startingLineTag, MPI_COMM_WORLD);
+                    nextStartingLine += blockSize;
+                    if (nextStartingLine >= height) nextStartingLine = -1;
+                }
+            }
+        }
 
-    } else { // child processes 
-
+    } else { // child processes
         /**
          * TODO child process
          * 1. Get block size from root process.
@@ -57,7 +112,18 @@ int main( int argc, char ** argv )
          * 4. Calculate blockSize-many lines beginning at start.
          * 5. Get a new offset. Exit if offset = -1.
          */
-
+        int blockSize = 0;
+        MPI_Bcast(&blockSize, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        int startingLine = 0;
+        unsigned char requestLineBuf = startingLineRequestBody;
+        std::vector<unsigned char> array(blockSize * width * 4);
+        while (startingLine != -1) {
+            MPI_Send(&requestLineBuf, 1, MPI_UNSIGNED_CHAR, 0, startingLineTag, MPI_COMM_WORLD);
+            MPI_Recv(&startingLine, 1, MPI_INT, 0, startingLineTag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            std::cout << rank << " " << startingLine << std::endl;
+            generateMandelbrotSubset(&array[0], rank, blockSize, startingLine, size);
+            MPI_Send(&array[0], blockSize * width * 4, MPI_UNSIGNED_CHAR, 0, calculatedResultTag, MPI_COMM_WORLD);
+        }
     }
 
     /**
