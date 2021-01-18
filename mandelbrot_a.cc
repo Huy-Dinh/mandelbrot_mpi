@@ -31,12 +31,10 @@ void generateMandelbrotSubset(unsigned char *array, int const rank, int const si
 {
     int heightSlice = height / size;
     int yOffset = height * rank / size;
-    int y = 0;
-    int x = 0;
-    for (y = 0; y < heightSlice; y++)
+    for (int y = 0; y < heightSlice; y++)
     {
         int realY = y + yOffset;
-        for (x = 0; x < width; x++)
+        for (int x = 0; x < width; x++)
         {
             complex c(xZero + sx * (x - width / 2) / m, yZero + sy * (realY - height / 2) / m);
             int iter = mandelbrot(c, max_abs, max_iter);
