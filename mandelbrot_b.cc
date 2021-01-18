@@ -34,16 +34,11 @@ double yZero = .0;
 
 void generateMandelbrotSubset(unsigned char *array, int const rank, int const blockSize, int const startingLine, int const size)
 {
-    int heightSlice = blockSize;
-    int yOffset = startingLine;
-    int y = 0;
-    int x = 0;
-    for (y = 0; y < heightSlice; y++)
+    for (int y = startingLine; y < startingLine + blockSize; y++)
     {
-        int realY = y + yOffset;
-        for (x = 0; x < width; x++)
+        for (int x = 0; x < width; x++)
         {
-            complex c(xZero + sx * (x - width / 2) / m, yZero + sy * (realY - height / 2) / m);
+            complex c(xZero + sx * (x - width / 2) / m, yZero + sy * (y- height / 2) / m);
             int iter = mandelbrot(c, max_abs, max_iter);
             unsigned int col = make_color(max_iter, iter, rank, size);
             set_pixel(array, width * y + x, col);
@@ -65,7 +60,8 @@ int main( int argc, char ** argv )
 
     int blockSize;
 
-    unsigned char* image = (unsigned char*) calloc(height, sizeof(unsigned char));
+    std::vector<unsigned char> image(height * width * 4, 0);
+    std::vector<unsigned char> subImage(height * width * 4, 0);
 
     if (rank == 0) { // root process
         std::cout << "Please enter the blocksize: ";
@@ -83,7 +79,6 @@ int main( int argc, char ** argv )
          */
         // Broadcast the block size to all processes
         MPI_Bcast(&blockSize, 1, MPI_INT, 0, MPI_COMM_WORLD);
-        std::cout << "Broadcasted" << std::endl;
         int stoppedProcessCount = 0;
         MPI_Status recvStatus;
         unsigned char requestLineBuf;
@@ -116,13 +111,12 @@ int main( int argc, char ** argv )
         MPI_Bcast(&blockSize, 1, MPI_INT, 0, MPI_COMM_WORLD);
         int startingLine = 0;
         unsigned char requestLineBuf = startingLineRequestBody;
-        std::vector<unsigned char> array(blockSize * width * 4);
+        MPI_Send(&requestLineBuf, 1, MPI_UNSIGNED_CHAR, 0, startingLineTag, MPI_COMM_WORLD);
+        MPI_Recv(&startingLine, 1, MPI_INT, 0, startingLineTag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         while (startingLine != -1) {
+            generateMandelbrotSubset(&subImage[0], rank, blockSize, startingLine, size);
             MPI_Send(&requestLineBuf, 1, MPI_UNSIGNED_CHAR, 0, startingLineTag, MPI_COMM_WORLD);
             MPI_Recv(&startingLine, 1, MPI_INT, 0, startingLineTag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            std::cout << rank << " " << startingLine << std::endl;
-            generateMandelbrotSubset(&array[0], rank, blockSize, startingLine, size);
-            MPI_Send(&array[0], blockSize * width * 4, MPI_UNSIGNED_CHAR, 0, calculatedResultTag, MPI_COMM_WORLD);
         }
     }
 
@@ -131,8 +125,16 @@ int main( int argc, char ** argv )
      * 1. Collect the final image with MPI_Reduce
      * 2. Encode the image in process 0
      */
+    MPI_Reduce(&subImage[0], &image[0], width * height * 4, MPI_UNSIGNED_CHAR, MPI_MAX, 0, MPI_COMM_WORLD);
 
-    free(image);
+    if (rank == 0) {
+        unsigned error = lodepng_encode32_file("mandelbrot_b.png", &image[0], width, height);
+        if (error)
+        {
+            std::cout << "error " << error << " : " << lodepng_error_text(error) << std::endl;
+        }
+    }
+
     /* Shutdown MPI */
     MPI_Finalize();
     return 0;
